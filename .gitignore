@@ -1,0 +1,17 @@
+# build artifacts
+build/
+build-*/
+out/
+
+# generated data (never commit datasets)
+*.bin
+*.parquet
+
+# python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+.cache/

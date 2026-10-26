@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  linux:
+    name: Build / Test / Benchmark (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NASM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+          nasm -v
+
+      - name: Configure (Release)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Synthetic data engine smoke test
+        run: |
+          python3 scripts/convert.py --synthetic 1000000 /tmp/amounts.bin
+          ./build/asm-stat --input /tmp/amounts.bin --engine auto
+          ./build/asm-stat --input /tmp/amounts.bin --engine scalar
+          ./build/asm-stat --input /tmp/amounts.bin --engine sse2
+          ./build/asm-stat --input /tmp/amounts.bin --engine avx2
+          ./build/asm-stat --input /tmp/amounts.bin --engine avx512
+
+      - name: Benchmark (smoke, 100万条)
+        run: ./build/asm-bench --count 1000000 --repeat 3
