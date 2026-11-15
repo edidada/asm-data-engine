@@ -1,8 +1,8 @@
 # asm-data-engine
 
-High-performance data analytics engine using **x86-64 Assembly (NASM)**, **SIMD (SSE2 / AVX2 / AVX-512)**, and **C**, targeting **Linux**.
+High-performance data analytics engine using x86-64 Assembly (NASM), SIMD (SSE2 / AVX2 / AVX-512), and C, targeting Linux.
 
-拿到一份真实的公开数据集（纽约出租车订单），把金额列转成二进制 double 流，然后用 **手写汇编** 在 CPU 上完成 `SUM / AVG / MIN / MAX / COUNT` 统计，并与 C 语言实现做性能对比。
+拿到一份真实的公开数据集（纽约出租车订单），把金额列转成二进制 double 流，然后用 手写汇编 在 CPU 上完成 `SUM / AVG / MIN / MAX / COUNT` 统计，并与 C 语言实现做性能对比。
 
 ```text
 NYC Parquet（或合成数据） → convert.py → amounts.bin (raw doubles)
@@ -83,7 +83,7 @@ ASM AVX2       ...
 ASM AVX-512    (skipped, no AVX-512)
 ```
 
-路线图（见 `README.txt` 备注：中级改进 main 分支，高级改进其他分支）：
+路线图（中级改进 main 分支，高级改进其他分支）：
 
 - [x] V1 SSE2 基础
 - [x] V3 AVX2 一次处理 4 个 double
@@ -97,12 +97,12 @@ ASM AVX-512    (skipped, no AVX-512)
 GitHub Actions（`.github/workflows/ci.yml`）在 `ubuntu-latest` 上执行：安装 NASM → CMake Release 构建 → 单元测试（ctest）→ 合成数据冒烟测试 → 基准测试冒烟。AVX-512 在 CI 机器不支持时测试会自动跳过对应内核，不会导致失败。
 推荐 GitHub 仓库名称：
 
-**`asm-data-engine`**
+`asm-data-engine`
 
-- **仓库名**：`asm-data-engine`
-- **项目描述**：High-performance data analytics engine using x86-64 Assembly, SIMD (AVX2/AVX-512), and C.
-- **主要技术**：NASM、C、CMake、SSE2、AVX2、AVX-512
-- **项目目标**：使用真实公开数据集，实现 SUM、AVG、MAX、MIN、COUNT 等统计计算，并与 C 语言进行性能对比。
+- 仓库名：`asm-data-engine`
+- 项目描述：High-performance data analytics engine using x86-64 Assembly, SIMD (AVX2/AVX-512), and C.
+- 主要技术：NASM、C、CMake、SSE2、AVX2、AVX-512
+- 项目目标：使用真实公开数据集，实现 SUM、AVG、MAX、MIN、COUNT 等统计计算，并与 C 语言进行性能对比。
 
 建议仓库结构：
 
@@ -126,15 +126,12 @@ asm-data-engine/
 └── tests/
 ```
 
-**GitHub 仓库名称：`asm-data-engine`**
 
-这是建议新建的仓库名称，并非已经存在且经过验证的 GitHub 仓库。
-
-可以，而且非常适合用来学习 **x86-64 汇编、CPU 性能优化、SIMD 向量计算和大数据处理**。
+可以，而且非常适合用来学习 x86-64 汇编、CPU 性能优化、SIMD 向量计算和大数据处理。
 
 建议做一个真实项目：
 
-**下载公开数据集 → 使用 ASM 读取数据 → 统计计算 → 输出报表 → 与 C 语言比较性能。**
+下载公开数据集 → 使用 ASM 读取数据 → 统计计算 → 输出报表 → 与 C 语言比较性能。
 
 可以分为三个难度：
 
@@ -181,7 +178,7 @@ FROM taxi_trips
 WHERE total_amount > 0;
 ```
 
-但不使用 MySQL 执行计算，而是**让自己编写的 ASM 程序直接处理数据**。
+但不使用 MySQL 执行计算，而是让自己编写的 ASM 程序直接处理数据。
 
 ## 二、实现方案
 
@@ -388,7 +385,7 @@ ld stats.o -o stats
 
 这段程序是真正执行 CPU 浮点计算的汇编程序。
 
-**注意：这是最小计算版本，计算结果保存在寄存器中，尚未实现打印报表；假设输入文件完整，且每次读取均为 8 字节的整数倍。** 正式版本还需要处理不完整读取、数值异常和输出格式。
+注意：这是最小计算版本，计算结果保存在寄存器中，尚未实现打印报表；假设输入文件完整，且每次读取均为 8 字节的整数倍。 正式版本还需要处理不完整读取、数值异常和输出格式。
 
 ## 四、后续升级为高性能计算引擎
 
@@ -422,21 +419,21 @@ ASM AVX-512          待测试
 
 ## 五、我的建议
 
-可以将这个项目命名为 **asm-data-engine**，采用 NASM + CMake，在 Linux x86-64 上开发。
+可以将这个项目命名为 asm-data-engine，采用 NASM + CMake，在 Linux x86-64 上开发。
 
 不过，有一个关键选择：
 
-**A. 纯 ASM 方案**：文件读取、数据计算、报表输出全部用汇编实现，重点研究操作系统调用、寄存器和 CPU。
+A. 纯 ASM 方案：文件读取、数据计算、报表输出全部用汇编实现，重点研究操作系统调用、寄存器和 CPU。
 
-**B. C + ASM 混合方案**：C 负责文件读取和报表输出，ASM 负责 SUM、AVG、MAX、MIN、SIMD，重点研究 CPU 科学计算性能。
+B. C + ASM 混合方案：C 负责文件读取和报表输出，ASM 负责 SUM、AVG、MAX、MIN、SIMD，重点研究 CPU 科学计算性能。
 
-**我更推荐 B**，因为它更接近真实数据库和高性能计算软件的工程实践。
+我更推荐 B，因为它更接近真实数据库和高性能计算软件的工程实践。
 
 备注：中级维度 main分支 高级维度其他git分支
 
-**是的，王爽《汇编语言》第4版主要讲的是 Intel 8086 CPU 的 16 位汇编语言，使用 MASM 风格的汇编语法。**
+是的，王爽《汇编语言》第4版主要讲的是 Intel 8086 CPU 的 16 位汇编语言，使用 MASM 风格的汇编语法。
 
-我前面给你的 `asm-data-engine` 项目使用的是 **x86-64（64 位）汇编，采用 NASM 语法**。
+我前面给你的 `asm-data-engine` 项目使用的是 x86-64（64 位）汇编，采用 NASM 语法。
 
 两者属于同一个 x86 指令体系的发展脉络，但在 CPU 工作模式、寄存器、内存寻址、程序结构和操作系统接口方面存在明显区别。
 
@@ -456,7 +453,7 @@ ASM AVX-512          待测试
 | 程序运行环境 | DOS / DOSBox | Linux x86-64 |
 | 典型用途 | 学习 CPU 和汇编原理 | 高性能计算、数据处理 |
 
-**需要特别注意：MASM 和 NASM 是汇编器，而 16 位和 64 位是 CPU 执行模式。**
+需要特别注意：MASM 和 NASM 是汇编器，而 16 位和 64 位是 CPU 执行模式。
 
 MASM 并不只能编写 16 位程序。现代 MASM 也支持 32 位和 64 位汇编。
 
@@ -497,21 +494,21 @@ end
 
 这里：
 
-**`codesg segment`**
+`codesg segment`
 
 定义一个名为 `codesg` 的段。
 
-**`assume cs:codesg`**
+`assume cs:codesg`
 
 告诉汇编器，将 `CS` 段寄存器与 `codesg` 关联起来进行汇编。
 
 注意，`assume` 本身不会生成修改 `CS` 的机器指令。
 
-**`codesg ends`**
+`codesg ends`
 
 表示段定义结束。
 
-**`end`**
+`end`
 
 表示源程序结束。
 
@@ -538,23 +535,23 @@ _start:
 
 这里：
 
-**`section .data`**
+`section .data`
 
 定义已初始化数据所在的节。
 
-**`section .text`**
+`section .text`
 
 定义代码所在的节。
 
-**`global _start`**
+`global _start`
 
 将 `_start` 符号导出给链接器。
 
-**`_start:`**
+`_start:`
 
 定义程序入口标签。
 
-**`syscall`**
+`syscall`
 
 执行 Linux x86-64 系统调用。
 
@@ -623,7 +620,7 @@ CPU 使用虚拟地址访问数据，操作系统负责建立虚拟内存映射�
 
 ## 四、王爽书中的知识还能用于现代科学计算吗？
 
-**不仅能用，而且是基础。**
+不仅能用，而且是基础。
 
 | 王爽书中的知识 | 现代 x86-64 对应知识 | 科学计算用途 |
 |---|---|---|
@@ -643,7 +640,7 @@ CPU 使用虚拟地址访问数据，操作系统负责建立虚拟内存映射�
 
 结合你准备开发的 `asm-data-engine` 项目，我建议：
 
-**先完成王爽《汇编语言》第4版，再转向 x86-64 NASM。**
+先完成王爽《汇编语言》第4版，再转向 x86-64 NASM。
 
 推荐学习顺序：
 
@@ -680,6 +677,6 @@ asm-data-engine
 
 你也可以参考 [清华大学出版社《汇编语言》第4版官方页面](https://www.tup.tsinghua.edu.cn/bookscenter/book_07970801.html?utm_source=chatgpt.com)，其中提供教材介绍及配套资源。
 
-**一个重要建议：** 不必把王爽书中的 16 位程序逐条改写成 64 位程序。先掌握寄存器、寻址、栈和程序执行流程，再系统学习 64 位 ABI、虚拟内存及 SIMD，效率更高。
+一个重要建议： 不必把王爽书中的 16 位程序逐条改写成 64 位程序。先掌握寄存器、寻址、栈和程序执行流程，再系统学习 64 位 ABI、虚拟内存及 SIMD，效率更高。
 
-对于你的目标，最终要掌握的不是某一种汇编器，而是 **现代 x86-64 CPU 的指令集与微架构性能优化技术**。
+对于你的目标，最终要掌握的不是某一种汇编器，而是 现代 x86-64 CPU 的指令集与微架构性能优化技术。
