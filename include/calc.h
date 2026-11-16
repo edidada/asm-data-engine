@@ -59,7 +59,48 @@ typedef enum {
 /* Best engine the current CPU supports (scalar -> sse2 -> avx2 -> avx512). */
 calc_engine calc_pick_engine(const calc_cpu_features *features);
 
+/* Downgrade `engine` until it is runnable on `features` (never fails). */
+calc_engine calc_engine_resolve(calc_engine engine,
+                                const calc_cpu_features *features);
+
 const char *calc_engine_name(calc_engine e);
+
+/* --------------------------- aggregate result --------------------------- */
+/*
+ * Result of one full SUM/MIN/MAX pass. `count` is the number of elements
+ * aggregated, so a zeroed result is a valid "empty" accumulator.
+ */
+typedef struct {
+    size_t count;
+    double sum;
+    double min;
+    double max;
+} calc_result;
+
+/* Aggregate one contiguous range with `engine`. Pass the result of
+ * calc_engine_resolve() when the engine came from user input. Empty input
+ * yields a zeroed result. */
+void calc_engine_aggregate(const double *data, size_t n, calc_engine engine,
+                           calc_result *out);
+
+/* Merge `part` into `acc`. Merging in chunk order keeps results stable. */
+void calc_result_merge(calc_result *acc, const calc_result *part);
+
+/* Online CPU count (>= 1). */
+int calc_cpu_count(void);
+
+/* ---------------------- V5: pthread chunked aggregation ----------------- */
+/*
+ * Split [data, data+n) into cache-line-aligned chunks, aggregate them in
+ * parallel with `engine`, and merge partial results in chunk order.
+ *
+ * threads <= 0  -> auto (online CPUs).
+ * Small inputs run on the calling thread to avoid spawn overhead.
+ *
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+int calc_aggregate_mt(const double *data, size_t n, calc_engine engine,
+                      int threads, calc_result *out);
 
 #ifdef __cplusplus
 }

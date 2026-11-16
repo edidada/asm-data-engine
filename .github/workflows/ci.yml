@@ -37,5 +37,23 @@ jobs:
           ./build/asm-stat --input /tmp/amounts.bin --engine avx2
           ./build/asm-stat --input /tmp/amounts.bin --engine avx512
 
-      - name: Benchmark (smoke, 100万条)
-        run: ./build/asm-bench --count 1000000 --repeat 3
+      - name: V6 large-file smoke (asm-gen, 5M records)
+        run: |
+          ./build/asm-gen --out /tmp/big.bin --count 5000000
+          ./build/asm-stat --input /tmp/big.bin --engine auto --threads 4 --io mmap --repeat 2
+          ./build/asm-stat --input /tmp/big.bin --engine scalar --threads 1 --io read --chunk-mb 1
+          ./build/asm-stat --input /tmp/big.bin --engine sse2 --threads 4 --io read --chunk-mb 1
+          ./build/asm-stat --input /tmp/big.bin --engine avx2 --threads 0 --io auto
+          ./build/asm-stat --input /tmp/big.bin --engine avx512 --threads 2 --repeat 1
+
+      - name: perf smoke (best effort, V7)
+        run: |
+          if command -v perf >/dev/null 2>&1; then
+            ./scripts/perf.sh ./build/asm-stat /tmp/big.bin --threads 4 --io mmap \
+              || echo "perf counters unavailable in CI (ignored)"
+          else
+            echo "perf not installed; skipping"
+          fi
+
+      - name: Benchmark (smoke, 100万条, pthread + cycles)
+        run: ./build/asm-bench --count 1000000 --repeat 3 --threads 4

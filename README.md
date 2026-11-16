@@ -1,15 +1,26 @@
 # asm-data-engine
 
-High-performance data analytics engine using x86-64 Assembly (NASM), SIMD (SSE2 / AVX2 / AVX-512), and C, targeting Linux.
+High-performance data analytics engine using x86-64 Assembly (NASM), SIMD (SSE2 / AVX2 / AVX-512), pthreads, mmap, and C, targeting Linux.
 
 拿到一份真实的公开数据集（纽约出租车订单），把金额列转成二进制 double 流，然后用 手写汇编 在 CPU 上完成 `SUM / AVG / MIN / MAX / COUNT` 统计，并与 C 语言实现做性能对比。
 
+V5 使用 pthread 分块并行，V6 使用 mmap / 分块 I/O 处理上亿条记录，V7 使用 TSC（`rdtsc`/`rdtscp`）与 `perf` 做细粒度测量。
+
 ```text
-NYC Parquet（或合成数据） → convert.py → amounts.bin (raw doubles)
-                                        ↓
-                          asm-stat / asm-bench（C 读文件 + NASM SIMD 计算）
-                                        ↓
-                             统计报表 / 性能对比表
+NYC Parquet（或合成数据）
+        │
+        ├── convert.py（真实数据）──┐
+        └── asm-gen（快速生成大文件）┤
+                                   ▼
+                         amounts.bin (raw doubles, 8 B/条)
+                                   │
+                                   ▼
+              asm-stat（pthread + mmap/分块 I/O + NASM SIMD）
+                                   │
+                 ┌─────────────────┼─────────────────┐
+                 ▼                 ▼                 ▼
+            统计报表          asm-bench          scripts/perf.sh
+          SUM/AVG/MIN/MAX   多引擎性能对比      perf stat 缓存/IPC
 ```
 
 ## 仓库结构
@@ -22,20 +33,30 @@ asm-data-engine/
 ├── data/                        # 数据目录（大文件不进库）
 ├── scripts/
 │   ├── convert.py               # Parquet/合成数据 → amounts.bin
-│   └── download_data.sh         # 下载 NYC TLC 数据
+│   ├── download_data.sh         # 下载 NYC TLC 数据
+│   └── perf.sh                  # V7: perf stat 缓存/IPC/分支
 ├── include/
-│   └── calc.h                   # 公共 API
+│   ├── calc.h                   # SIMD API + 聚合/线程 API
+│   ├── calc_io.h                # V6: mmap / 分块读取
+│   └── calc_cycles.h            # V7: rdtsc/rdtscp 计时
 ├── src/
-│   ├── main.c                   # asm-stat CLI（C 读文件、输出报表）
-│   ├── calc_scalar.c            # 标量 C 参考实现（正确性基准）
-│   ├── calc_dispatch.c          # CPUID 运行时检测 + 分发
+│   ├── main.c                   # asm-stat CLI（线程 + I/O + 报表）
+│   ├── calc_scalar.c            # 标量 C 参考实现
+│   ├── calc_dispatch.c          # CPUID 检测 + 引擎分发
+│   ├── calc_engine.c            # 聚合结果合并 / 统一引擎入口
+│   ├── calc_threads.c           # V5: pthread 线程池 + 64B 分块
+│   ├── calc_io.c                # V6: mmap / chunked read 迭代器
+│   ├── calc_cycles.c            # V7: TSC 频率校准
+│   ├── calc_rdtsc.asm           # V7: lfence/rdtsc + rdtscp/lfence
 │   ├── calc_sse2.asm            # SSE2：一次 2 个 double
 │   ├── calc_avx2.asm            # AVX2：一次 4 个 double
 │   └── calc_avx512.asm          # AVX-512：一次 8 个 double
+├── tools/
+│   └── asm-gen.c                # 快速生成 1 亿+ 条 double 测试数据
 ├── benchmarks/
-│   └── benchmark.c              # C -O3 vs SSE2 vs AVX2 vs AVX-512
+│   └── benchmark.c              # 单线程 sum + pthread 聚合 + cycles/elem
 └── tests/
-    └── test_calc.c              # 各引擎与标量参考对拍（含边界长度）
+    └── test_calc.c              # SIMD / 线程 / I/O / cycles 对拍
 ```
 
 ## 快速开始
@@ -51,80 +72,133 @@ ctest --test-dir build --output-on-failure
 生成数据并运行统计报表：
 
 ```bash
-# 合成数据（任何机器可用）
+# 合成数据（Python，100 万条）
 python3 scripts/convert.py --synthetic 1000000 amounts.bin
 ./build/asm-stat --input amounts.bin --engine auto
+
+# 大文件（C 生成器，磁盘速度，适合 1 亿～10 亿条）
+./build/asm-gen --out big.bin --count 100000000
+./build/asm-stat --input big.bin --threads 16 --io mmap --repeat 3
 
 # 真实 NYC 数据
 ./scripts/download_data.sh 2024-01
 ./build/asm-stat --input yellow_tripdata_2024-01.bin --engine auto
 ```
 
-选择引擎：`--engine auto|scalar|sse2|avx2|avx512`（CPU 不支持时自动降级并提示）。
+`asm-stat` 选项：
+
+```text
+--engine auto|scalar|sse2|avx2|avx512   计算内核（默认 auto，CPU 不支持时自动降级）
+--threads N                            线程数，0 = 全部在线 CPU（默认 0）
+--io auto|mmap|read                    I/O 方式（默认 auto：优先 mmap，失败回退 read）
+--chunk-mb N                           分块大小 MiB（默认 64）
+--repeat R                             重复扫描 R 次取最快（默认 1）
+```
+
+## V5 多线程分块计算（pthread）
+
+`calc_aggregate_mt`（`src/calc_threads.c`）把输入切成 8 个 double（64 字节）对齐的块，每个线程独立计算自己的 `SUM/MIN/MAX/COUNT`，最后由调用线程按块顺序合并：
+
+- 每个线程的结果放在独立的 64 字节 cache line 中，避免 false sharing。
+- 调用线程也是 worker 0，N 个线程就真的用 N 个执行流。
+- 惰性创建、跨调用复用的线程池：处理 1 亿条数据时文件会被分成很多块，避免每块都重新 `pthread_create`。
+- 每线程至少 8192 个 double（64 KiB）才并行；小输入直接在当前线程完成。
+- 线程池创建失败时退化为按调用创建线程，再失败则串行执行。
+- 合并顺序固定，因此同一线程数下浮点结果可复现。
+
+单元测试对 1/2/3/4/8/16 线程、0～100000 条数据与标量参考实现逐项对拍。
+
+## V6 mmap / 分块 I/O 处理上亿条数据
+
+`src/calc_io.c` 提供前向迭代器 `calc_file_next()`：每次返回一段完整的 double，调用方可以用**固定内存**扫描任意大小的文件。
+
+- `--io auto`：优先 `mmap`，映射失败（非普通文件、地址空间不足等）自动回退到 `read`。
+- `--io mmap`：整文件只读映射，零拷贝；用 `MADV_SEQUENTIAL` 提示内核顺序预读。
+- `--io read`：复用一块 64 MiB（可调）页对齐缓冲区，内存占用恒定，适合内存小于数据集的机器。
+- 文件大小必须是 8 的倍数，否则在 `open` 阶段直接报错；短读/文件截断会返回明确错误。
+- 支持 `calc_file_rewind()`，`--repeat` 不必重新映射或重新打开文件。
+
+`tools/asm-gen.c` 用 C 以磁盘速度生成测试文件（`./build/asm-gen --out big.bin --count 100000000`），避免 Python 生成 8 GB 数据过慢。
+
+1 亿条记录（762.94 MB，16 线程，mmap）的实测输出示例（数值取决于机器）：
+
+```text
+== asm-data-engine report ==
+input        : big.bin (762.94 MB)
+records      : 100000000
+engine       : avx512
+threads      : 16 (16 online)
+io           : mmap (chunk 64.0 MiB, 12 chunk(s))
+best time    : 0.043184 s (3 scans)
+throughput   : 18.53 GB/s, 2315.66 M elem/s
+tsc          : 1.64 cycles/elem @ 3.79 GHz (wall, includes I/O)
+SUM          : 12599523370.5600
+AVG          : 125.9952
+MIN          : 2.0000
+MAX          : 249.9900
+```
+
+`throughput` 按有效数据（8 B/条）计算；`SUM/MIN/MAX` 实际扫描三遍，因此内存带宽约为该数字的 3 倍。10 亿条（8 GB）时使用 `--io read --chunk-mb 64` 可把常驻内存控制在 64 MiB 左右。
+
+## V7 perf / CPU cycles 细粒度测量
+
+- `src/calc_rdtsc.asm` 实现串行化计时：`calc_cycles_begin()` = `lfence; rdtsc`，`calc_cycles_end()` = `rdtscp; lfence`，避免乱序执行把测量区间前后指令混进来。
+- `calc_cycle_hz()` 用 `CLOCK_MONOTONIC` 在约 20 ms 窗口内校准 invariant TSC 频率，不假设 CPU 标称频率。
+- `asm-stat` 输出 wall time、GB/s、M elem/s 和 `cycles/elem`（含 I/O 的墙钟周期）。
+- `asm-bench` 对每个内核同时报告 best time、GB/s、cycles/elem、ns/elem；pthread 聚合行使用与单线程聚合相同的 `SUM+MIN+MAX` 三遍扫描以便公平对比。
+
+用 `perf` 查看缓存命中率、IPC、分支预测等整进程指标：
+
+```bash
+# Ubuntu: 安装与当前内核匹配的 perf
+sudo apt-get install -y linux-tools-common linux-tools-$(uname -r)
+
+sudo ./scripts/perf.sh ./build/asm-stat big.bin --threads 16 --io mmap
+# 可选：用 perf record 采集调用图
+PERF_RECORD=1 sudo ./scripts/perf.sh ./build/asm-stat big.bin --threads 16 --io mmap
+```
+
+`perf_event_paranoid` 较高时普通用户无法读取硬件计数器，脚本会给出提示；`cycles/elem` 始终可用，不依赖 `perf`。
 
 ## 性能对比
 
 ```bash
-./build/asm-bench --count 1000000 --repeat 5
+./build/asm-bench --count 2000000 --repeat 10 --threads 8
 ```
 
-输出示例（数值取决于机器）：
+输出示例（AMD Ryzen 7 8845H / WSL2，数值取决于机器）：
 
 ```text
 == asm-data-engine benchmark ==
-elements: 1000000 (~7.6 MB)   repeats per kernel: 5
-cpu: sse2=1 avx2=1 avx512f=0
+elements: 2000000 (~15.3 MB)   repeats per kernel: 10
+cpu: sse2=1 avx2=1 avx512f=1   cpu threads=16   tsc=3.79 GHz
 
-kernel         best time    throughput   checksum
-----------------------------------------------------------------
-C scalar -O3   ...
-ASM SSE2       ...
-ASM AVX2       ...
-ASM AVX-512    (skipped, no AVX-512)
+kernel                          best time     throughput  cycles/elem    ns/elem  checksum
+-------------------------------------------------------------------------------------------------------
+C scalar -O3 (sum)             0.001240 s      12.91 GB/s        2.35       0.62  1049819112.8010
+ASM SSE2 (sum)                 0.000630 s      25.42 GB/s        1.19       0.31  1049819112.8010
+ASM AVX2 (sum)                 0.000345 s      46.35 GB/s        0.65       0.17  1049819112.8010
+ASM AVX-512 (sum)              0.000410 s      38.99 GB/s        0.78       0.21  1049819112.8010
+ASM avx512 aggregate x1        0.001584 s      30.29 GB/s        3.01       0.79  1049819112.8010
+ASM avx512 aggregate x8        0.000469 s     102.44 GB/s        0.89       0.23  1049819112.8010
 ```
 
-路线图（中级改进 main 分支，高级改进其他分支）：
+- `(sum)` 行是一次 SIMD 扫描；`aggregate` 行执行 `SUM+MIN+MAX` 三遍扫描，GB/s 按三遍总字节数计算，因此可以直接比较。
+- 数据能放进 L3 时多线程接近线性扩展；上亿条、超出 cache 时通常先撞到内存带宽上限。
+- 想复现 AVX-512 的差异，请在支持 AVX-512 的机器上运行；否则对应行自动跳过。
+
+路线图：
 
 - [x] V1 SSE2 基础
 - [x] V3 AVX2 一次处理 4 个 double
 - [x] V4 AVX-512 一次处理 8 个 double（运行时 CPUID 检测）
-- [ ] V5 多线程分块计算（pthread）
-- [ ] V6 mmap / 分块 I/O 处理上亿条数据
-- [ ] V7 perf / CPU cycles 细粒度测量
+- [x] V5 多线程分块计算（pthread）
+- [x] V6 mmap / 分块 I/O 处理上亿条数据
+- [x] V7 perf / CPU cycles 细粒度测量
 
 ## CI
 
-GitHub Actions（`.github/workflows/ci.yml`）在 `ubuntu-latest` 上执行：安装 NASM → CMake Release 构建 → 单元测试（ctest）→ 合成数据冒烟测试 → 基准测试冒烟。AVX-512 在 CI 机器不支持时测试会自动跳过对应内核，不会导致失败。
-推荐 GitHub 仓库名称：
-
-`asm-data-engine`
-
-- 仓库名：`asm-data-engine`
-- 项目描述：High-performance data analytics engine using x86-64 Assembly, SIMD (AVX2/AVX-512), and C.
-- 主要技术：NASM、C、CMake、SSE2、AVX2、AVX-512
-- 项目目标：使用真实公开数据集，实现 SUM、AVG、MAX、MIN、COUNT 等统计计算，并与 C 语言进行性能对比。
-
-建议仓库结构：
-
-```text
-asm-data-engine/
-├── README.md
-├── CMakeLists.txt
-├── data/
-├── scripts/
-│   └── convert.py
-├── include/
-│   └── calc.h
-├── src/
-│   ├── main.c
-│   ├── calc_scalar.c
-│   ├── calc_sse2.asm
-│   ├── calc_avx2.asm
-│   └── calc_avx512.asm
-├── benchmarks/
-│   └── benchmark.c
-└── tests/
-```
+GitHub Actions（`.github/workflows/ci.yml`）在 `ubuntu-latest` 上执行：安装 NASM → CMake Release 构建 → 单元测试（ctest，覆盖 SIMD、pthread、mmap/read、TSC）→ 合成数据冒烟测试（标量/SIMD、mmap/read、多线程、各种分块大小）→ 基准测试冒烟。AVX-512 在 CI 机器不支持时测试会自动跳过对应内核，不会导致失败；`perf` 步骤为尽力而为，没有权限时不会使 CI 失败。
 
 
 可以，而且非常适合用来学习 x86-64 汇编、CPU 性能优化、SIMD 向量计算和大数据处理。

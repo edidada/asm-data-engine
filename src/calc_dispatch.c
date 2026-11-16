@@ -50,6 +50,30 @@ calc_engine calc_pick_engine(const calc_cpu_features *features)
     return CALC_ENGINE_SSE2;
 }
 
+calc_engine calc_engine_resolve(calc_engine engine,
+                                const calc_cpu_features *features)
+{
+    if (!features || !features->has_sse2)
+        return CALC_ENGINE_SCALAR;
+
+    switch (engine) {
+    case CALC_ENGINE_AVX512:
+        if (features->has_avx512f)
+            return CALC_ENGINE_AVX512;
+        /* fall through */
+    case CALC_ENGINE_AVX2:
+        if (features->has_avx2)
+            return CALC_ENGINE_AVX2;
+        /* fall through */
+    case CALC_ENGINE_SSE2:
+    case CALC_ENGINE_SCALAR:
+        return (engine == CALC_ENGINE_SCALAR) ? CALC_ENGINE_SCALAR
+                                              : CALC_ENGINE_SSE2;
+    default:
+        return CALC_ENGINE_SCALAR;
+    }
+}
+
 const char *calc_engine_name(calc_engine e)
 {
     switch (e) {

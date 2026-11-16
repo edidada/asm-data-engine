@@ -31,6 +31,8 @@ set(CMAKE_ASM_NASM_FLAGS "${CMAKE_ASM_NASM_FLAGS} -w+all")
 # Libraries
 # ---------------------------------------------------------------------------
 
+find_package(Threads REQUIRED)
+
 # Hand-written SIMD kernels (SSE2 / AVX2 / AVX-512)
 add_library(calc STATIC
     src/calc_sse2.asm
@@ -49,21 +51,36 @@ add_library(calc_dispatch STATIC src/calc_dispatch.c)
 target_include_directories(calc_dispatch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(calc_dispatch PUBLIC calc calc_scalar)
 
+# V5/V6/V7 runtime: pthread aggregation, mmap/chunked I/O, TSC timing
+add_library(calc_runtime STATIC
+    src/calc_engine.c
+    src/calc_threads.c
+    src/calc_io.c
+    src/calc_cycles.c
+    src/calc_rdtsc.asm
+)
+target_include_directories(calc_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(calc_runtime PUBLIC
+    calc calc_scalar calc_dispatch Threads::Threads)
+
 # ---------------------------------------------------------------------------
 # Executables
 # ---------------------------------------------------------------------------
 
-# Main CLI: file -> statistics report
+# Main CLI: file -> statistics report (threads + mmap/chunked I/O + TSC report)
 add_executable(asm-stat src/main.c)
-target_link_libraries(asm-stat PRIVATE calc_dispatch)
+target_link_libraries(asm-stat PRIVATE calc_runtime m)
 
-# Benchmark: scalar C vs SSE2 vs AVX2 vs AVX-512
+# Benchmark: scalar C vs SSE2 vs AVX2 vs AVX-512 (+ pthread run, cycles/elem)
 add_executable(asm-bench benchmarks/benchmark.c)
-target_link_libraries(asm-bench PRIVATE calc_dispatch)
+target_link_libraries(asm-bench PRIVATE calc_runtime m)
+
+# Fast raw-double generator for 100M+ record files
+add_executable(asm-gen tools/asm-gen.c)
 
 # Correctness tests
 add_executable(calc-tests tests/test_calc.c)
-target_link_libraries(calc-tests PRIVATE calc_dispatch)
+target_link_libraries(calc-tests PRIVATE calc_runtime m)
 
 enable_testing()
 add_test(NAME calc-tests COMMAND calc-tests)
